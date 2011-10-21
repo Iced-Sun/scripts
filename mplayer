@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright 2010 Bing Sun <subi.the.dream.walker@gmail.com> 
-# Time-stamp: <subi 2011/09/26 14:12:17>
+# Time-stamp: <subi 2011/10/21 16:52:16>
 #
 # mplayer-wrapper is a simple CUI frontend for MPlayer written in
 # BASH, trying to be a transparent interface to the original 'mplayer'
