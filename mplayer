@@ -1,0 +1,695 @@
+#!/usr/bin/env bash
+# Copyright 2010 Bing Sun <subi.the.dream.walker@gmail.com> 
+# Time-stamp: <subi 2011/09/26 14:12:17>
+#
+# mplayer-wrapper is a simple CUI frontend for MPlayer written in
+# BASH, trying to be a transparent interface to the original 'mplayer'
+# binary. It is convenient to rename the script to "mplayer" and place
+# it in your local search path (please don't overwrite the real
+# MPlayer); you would not even notice its existence.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307,
+# USA
+
+# TODO:
+#  a) bi-lingual subtitles, i.e. chs+eng
+
+probe_mplayer () {
+    if [[ -x /usr/bin/mplayer ]]; then
+        MPLAYER="/usr/bin/mplayer"
+    else
+        cat <<EOF
+Failed to detect the mplayer binary in /usr/bin.
+Please check your mplayer installation.
+EOF
+        exit 1
+    fi
+}
+
+midentify () {
+    # stolen from mplayer/TOOLS/midentify.sh
+    ${MPLAYER} -vo null -ao null -frames 0 -identify "$@" 2>/dev/null |
+      sed -ne '/^ID_.*=/ {s/[]()|&;<>`'"'"'\\!$" []/\\&/g;p}'
+}
+
+is_debug () {
+    [[ $DEBUG == "yes" ]] && return 0 || return 1
+}
+
+### Global setups
+configure_global () {
+    check_bin () {
+        while [[ $# -gt 0 ]]; do
+            which "$1" >/dev/null 2>&1 || return 1
+            shift
+        done
+        return 0
+    }
+
+    ## CACHE DIRS
+    MPLAYER_CACHE_DIR="${HOME}/.cache/mplayer"
+    SUBTITLES_DIR="${MPLAYER_CACHE_DIR}/subtitles"
+    RESUME_CACHE="${MPLAYER_CACHE_DIR}/resume"
+    FIFO="${MPLAYER_CACHE_DIR}/fifo"
+
+    mkdir -p "${MPLAYER_CACHE_DIR}"
+    mkdir -p "${SUBTITLES_DIR}"
+    touch "${RESUME_CACHE}"
+    rm -rf "$FIFO"
+    mkfifo "$FIFO"
+
+    ## default global setups
+    # ( EXPAND EXPAND_METHOD RESUME FETCH UNRAR )
+    # 0 - expand video?: enable by default, disable if
+    #   a). awk is absent
+    #   b). xrandr is absent (for detecting resolution)
+    #
+    # 1 - how to expand?: ass by default, use noass if
+    #   a). -noass is specified in command line (sorry, don't support config files)
+    #   b). libass is not supported by mplayer
+    #
+    # 2 - resume lastplayed?: enable by default, disable if
+    #   a). awk is absent
+    #
+    # 3 - subtitle auto-fetching?: enable by default, disable if
+    #   a). awk is absent
+    #   b). unrar is absent (uncompress the subtitles)
+    #   c). wget is absent
+    #   d). js, jsc, or gjs is absent (all javascript consoles)
+    #
+    # 4 - unrar?: enable by default, disable if
+    #   a). unrar is absent
+    #   b). -unrarexec is not supported by mplayer
+    #
+    CONFIGS=( yes ass yes yes yes )
+    
+    # debug?: if you want to know what options are finally generated
+    DEBUG=no
+
+    ## check the essential gawk first!
+    if ! check_bin gawk; then
+        # EXPAND, RESUME, FETCH, UNRAR
+        eval CONFIGS[{0,{2..4}}]=no
+    else
+        # generate SUPPORTED_OPTIONS
+        declare -A SUPPORTED_OPTIONS
+        eval $( awk '
+{ if (NF>=7 && NR>2) {
+    if (NF==7) value=$2;
+    if (NF==8) value=$2" "$3;
+    if (NF==9) value=$2" "$3" "$4;
+    printf("SUPPORTED_OPTIONS[%s]=\"%s\"\n",$1,value)
+  }
+}' <(${MPLAYER} -list-options) )
+    fi
+
+    ## Adjust global configs according to environment and parameters
+    # parse the incoming options
+    ORI_OPTS=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -debug)
+                DEBUG=yes
+                shift
+                ;;
+            -noass) # special option that affects my setups
+                CONFIGS[1]=noass
+                ;;&
+            -vf*|-af*) # mplayer -list-options really list -vf-add/-vf/-vf-pre as -vf*
+                if [[ "$2" == -* || $# -eq 1 ]]; then
+                    ORI_OPTS+=" $1"
+                    shift
+                else
+                    ORI_OPTS+=" $1 $2"
+                    shift 2
+                fi
+                ;;
+            --) # end of options
+                shift
+                FILES+=( "$@" )
+                break
+                ;;
+            -*)
+                # Do we have support by mplayer?
+                if [[ x${SUPPORTED_OPTIONS["${1#-}"]} == "x" ]]; then
+                    cat >&2 <<EOF
+Your mplayer doesn't seem to support the "$1" option.
+Will ignore the option silently.
+
+EOF
+                    shift
+                elif [[ ${SUPPORTED_OPTIONS["${1#-}"]} == "Flag" ]]; then
+                    # option that doesn't take argument
+                    ORI_OPTS+=" $1"
+                    shift
+                else
+                    # option that take one argument
+                    if [[ "$2" == -* || $# -eq 1 ]]; then
+                        ORI_OPTS+=" $1"
+                        shift
+                    else
+                        ORI_OPTS+=" $1 $2"
+                        shift 2
+                    fi
+                fi
+                ;;
+            *) # will be treated as files
+                FILES+=( "$1" )
+                shift
+        esac
+    done
+
+    # automatically generate playlist according to the filename (i.e. ep1.mkv ep2.mkv)
+    if [[ ${#FILES[@]} == "1" ]]; then
+        local FILE=$(basename "${FILES[0]}")
+        local DIR=$(dirname "${FILES[0]}")
+
+        set -- $(exec 2>/dev/null; ls ${DIR}/*.${FILE##*.} | xargs -n1 basename | sort -n)
+        # Discard alphabetically heading files
+        while [[ $# -gt 0 ]]; do
+            [[ "$FILE" == "$1"  ]] && break || shift;
+        done
+
+        ### FIXME: consider using keywords like "EP", "CD", "第 集", etc.?
+        # Extract the common leading substring of the first two filenames
+        local len=0;
+        for ((i=0; i<${#1} && i<${#2}; i++)); do
+            if [[ "${1:$i:1}" == "${2:$i:1}" ]]; then
+                len=$((i+1));
+            else
+                # leading '0' is not part of common substring
+                while (( len > 0 )); do
+                    [[ "${1:$((len-1)):1}" == "0" ]] && let "len--" || break;
+                done
+
+                break;
+            fi
+        done
+
+        # Add successors
+        local COMMON=${1:0:$len};
+        local DIFF S1 S2;
+        until [[ $# -eq 1 ]]; do
+            S1=$(echo ${1##"$COMMON"} | sed -ne 's/^\([[:digit:]]\+\).*/\1/p');
+            S2=$(echo ${2##"$COMMON"} | sed -ne 's/^\([[:digit:]]\+\).*/\1/p');
+            let "DIFF=10#${S2}-10#${S1}";
+            [[ $DIFF == "1" ]] && FILES+=( "${DIR}/$2" ) || break
+            shift
+        done
+    fi
+    
+    # check xrandr
+    ! check_bin xrandr && CONFIGS[0]=no
+
+    # check if libass and unrar are supported
+    [[ x"$SUPPORTED_OPTIONS[ass-use-margins]" == "x" ]]  && CONFIGS[1]="noass"
+    [[ x"$SUPPORTED_OPTIONS[unrarexec]" == "x" ]]  && CONFIGS[4]="no"
+
+    # check unrar
+    ! check_bin unrar && eval CONFIGS[{3,4}]="no" || UNRAREXEC=$(which unrar)
+    
+    # check tools for subtitle fetching
+    ! check_bin wget && CONFIGS[3]="no"
+    if check_bin js; then
+        JS_CMD="js -e"
+    elif check_bin jsc; then
+        JS_CMD="jsc -e"
+    elif check_bin gjs; then
+        JS_CMD="gjs -c"
+    else
+        CONFIGS[3]="no"
+    fi
+    
+
+    # debug information
+    if is_debug; then
+        echo ===============================================================================
+        echo "Global setups:"
+        echo "  " FILES=\"${FILES[@]}\"
+        echo "  " ORI_OPTS=\"$ORI_OPTS\"
+        echo
+        echo "  " EXPAND=\"${CONFIGS[0]}\"
+        echo "  " EXPAND_METHOD=\"${CONFIGS[1]}\"
+        echo "  " RESUME=\"${CONFIGS[2]}\"
+        echo "  " FETCH=\"${CONFIGS[3]}\"
+        echo "  " UNRAR=\"${CONFIGS[4]}\"
+    fi
+
+    unset SUPPORTED_OPTIONS
+}
+    
+### Local setups for each media file
+configure_local () {
+    ## nested helper function
+    is_stream () {
+        # need more
+        echo "$@" | grep -E -q "(ftp|rtsp|mms)://"
+        return $?
+    }
+
+    # unset the previous global variables
+    unset ID_VIDEO_{FORMAT,WIDTH,HEIGHT,ASPECT} ID_SEEKABLE ID_FILE_SUB_ID ID_SUBTITLE_ID ID_VOBSUB_ID
+    unset MY_{BASENAME,DIRNAME}
+    unset CONFIGS_LOCAL
+
+    # default setups
+    CONFIGS_LOCAL=( "${CONFIGS[@]}" )
+
+    if is_stream "$@"; then
+        # don't do anything (including trying to identify it)
+        CONFIGS_LOCAL[1]=noass
+        eval CONFIGS_LOCAL[{2..4}]=no
+    else # Ok, it should be a local file
+        eval $(midentify "$@")
+
+        # build vars for convenience
+        CANONICAL_NAME=$(readlink -m "$ID_FILENAME")
+        FILENAME=$(basename "$CANONICAL_NAME")
+        CANONICAL_DIR=$(dirname "$CANONICAL_NAME")
+        DIRNAME=$(basename "$CANONICAL_DIR")
+
+        # if (( video_aspect < 1.333 )), force 4:3
+        ((3*ID_VIDEO_WIDTH < 4*ID_VIDEO_HEIGHT)) && CONFIGS_LOCAL[1]="dsize"
+
+        # only seekable video can be resumed
+        [[ $ID_SEEKABLE != "1" ]] && CONFIGS_LOCAL[2]="no"
+
+        ## various subtitle sources
+        # sub_file: ID_FILE_SUB_ID -- don't fetch
+        # sub_demux: ID_SUBTITLE_ID -- don't fetch
+        [[ $ID_FILE_SUB_ID != "" || $ID_SUBTITLE_ID != "" ]] && CONFIGS_LOCAL[3]="no"
+        # sub_vob: ID_VOBSUB_ID -- I'm a vobsub hater, so fetch whether or not vobsub exists
+        
+        # don't contain a video stream
+        [[ "$ID_VIDEO_FORMAT" == "" ]] && eval CONFIGS_LOCAL[{0,{2..4}}]=no
+    fi
+
+    # debug information
+    if is_debug; then
+        echo ===============================================================================
+        echo "Local setup for \"$@\""
+        echo "  " EXPAND_LOCAL=\"${CONFIGS_LOCAL[0]}\"
+        echo "  " EXPAND_METHOD_LOCAL=\"${CONFIGS_LOCAL[1]}\"
+        echo "  " RESUME_LOCAL=\"${CONFIGS_LOCAL[2]}\"
+        echo "  " FETCH_LOCAL=\"${CONFIGS_LOCAL[3]}\"
+        echo "  " UNRAR_LOCAL=\"${CONFIGS_LOCAL[4]}\"
+    fi
+}
+
+### generate options
+gen_opts () {
+    OPTS=(
+        $([[ "${CONFIGS_LOCAL[0]}" == yes ]] && expand_video "${CONFIGS_LOCAL[1]}")
+        $([[ "${CONFIGS_LOCAL[2]}" == yes ]] && resume load)
+        $([[ "${CONFIGS_LOCAL[4]}" == yes ]] && echo "-unrarexec ${UNRAREXEC}")
+        $(echo "-slave -input file=${FIFO}")
+        -vf-add pp=ac -osdlevel 3
+        -noquiet
+    )
+    # need special care
+    heartbeat "${OPTS[@]}"
+}
+
+## expand video so that the subtitle can be placed in the blank area
+expand_video () {
+    ## helper function
+    is_ID_VIDEO_ASPECT_valid () {
+        # null or 0 is invalid
+        [[ "${ID_VIDEO_ASPECT}" == "" || "${ID_VIDEO_ASPECT}" == "0.0000" ]] && return 1 || return 0
+    }
+
+    local AWKSCRIPT DIM ARGS
+    local MYOPTS
+
+    ## check resolution
+    AWKSCRIPT='
+BEGIN {
+  w = 0;
+  h = 0;
+}
+/*/ {
+  split($1,res,"x");
+  if (res[1]>w) {
+    w = res[1];
+    h = res[2];
+  }
+}
+END {
+  printf("%d %d %f",w,h,w/h);
+}'
+    DIM=( $(awk "$AWKSCRIPT" <(xrandr)) )
+    
+    ### Calculate the expansion parameters
+    case "$1" in
+        dsize)
+            MYOPTS="-vf-pre dsize=4/3"
+            ;;
+        noass)
+            MYOPTS="-vf-pre expand=::::1:${DIM[2]}"
+            ;;
+        ass)
+            MYOPTS="-ass -embeddedfonts"
+
+            ARGS=( $ID_VIDEO_WIDTH $ID_VIDEO_HEIGHT $ID_VIDEO_ASPECT "${DIM[@]}" )
+        
+     	    # Fix ID_VIDEO_WIDTH of non-square pixel, i.e.
+            # if width != height * aspect, let width = height * aspect
+            if is_ID_VIDEO_ASPECT_valid; then
+                AWKSCRIPT='
+{ d = $1 - $2*$3 ;
+
+  if ( d>10 || d<-10 )
+    printf("%d",$2*$3);
+  else
+    printf("%d",$1);
+}
+'
+                ARGS[0]=$( awk "$AWKSCRIPT" <<< "${ARGS[@]}" )
+            fi
+
+            # hack the weird coefficient of -ass-font-scale
+            # (?/x_width) * video_aspect
+            AWKSCRIPT='
+{ printf(" -ass-font-scale %f",1200/$4 * ($1/$2));
+}
+'
+            MYOPTS+=$( awk "$AWKSCRIPT" <<< "${ARGS[@]}" )
+        
+            # calculate margins
+            AWKSCRIPT='
+{ m = int( ($1/$6 - $2) / 2 );
+  if (m>0)
+    printf(" -ass-use-margins -ass-top-margin %d -ass-bottom-margin %d",m,m);
+}
+'
+            MYOPTS+=$( awk "$AWKSCRIPT" <<< "${ARGS[@]}" )
+
+            # We expand video by changing video height, so we scale fonts according to video width
+            MYOPTS+=" -subfont-autoscale 2"
+            ;;
+        *)
+            true
+    esac
+
+    # output opts
+    echo "$MYOPTS"
+}
+
+## resume last played
+resume () {
+    local AWKSCRIPT
+    
+    case "$1" in
+        save)
+            AWKSCRIPT='
+{ if ($1 > 100 && $1/$2 < 0.95 && movie != "")
+    printf("%s%%%d%%%d\n", movie, systime(),$1-3);
+}
+'
+            awk -v movie="$FILENAME" "$AWKSCRIPT" <<< "$2 $ID_LENGTH" >>"$RESUME_CACHE"
+            ;;
+        load)
+            # pop time position and generate options (-ss xxx.xx), also nuke ancient entries (>30 days ago)
+            AWKSCRIPT='
+{ if ($1 == movie)
+    pos=$3;
+  else if (systime()-$2 < 30*86400)
+    print >cache
+}
+END {printf("-ss %d",pos)
+}
+'
+            awk -F"%" -v movie="$FILENAME" -v cache="$RESUME_CACHE" "$AWKSCRIPT" "$RESUME_CACHE"
+            ;;
+        *)
+            echo Unknow sub-command of resume.
+            ;;
+    esac
+}
+
+## generate heartbeat commands to stop screensaver
+heartbeat () {
+    local CMD
+    
+    if pgrep gnome-screensav >/dev/null; then
+        CMD="gnome-screensaver-command -p"
+    elif pgrep xscreen-saver >/dev/null; then
+        CMD="xscreen-saver-command -deactivate"
+    else
+        CMD=""
+    fi
+
+    [[ "$CMD" == "" ]] || OPTS+=( -heartbeat-cmd "$CMD" )
+}
+
+### parse mplayer's stdout
+parse_output () {
+    local AWKSCRIPT
+    AWKSCRIPT='
+BEGIN {
+  RS = "\r|\n";
+  FS = "[()]|[AV]:";
+}
+{
+  printf("%s%s",$0,RT);
+}
+/^A:/ {
+  pos=$2;
+}
+/^Exiting\.\.\./ {
+  ext=$2;
+}
+END {
+  # save exit status to FIFO for later use
+  command="echo " ext " " pos " >" fifo " &";
+  print command | "/bin/bash";
+}'
+    exec awk -v fifo=$FIFO "$AWKSCRIPT"
+}
+
+### generate query string
+gen_query () {
+    local AWKSCRIPT
+    # 无耻混蛋.Inglourious.Basterds.2009.BDRip.X264-TLF(548063E9).mkv -> BDRip+Inglourious+Basterds+TLF
+    # 02.25.07.Crimson.Pig.1992.DVDRip.X264.TriAudio.iNT-TLF -> iNT+Crimson+Pig+TLF
+    # Amelie.2001.720P.BDRip.X264-TLF -> BDRip+TLF+Amelie
+    AWKSCRIPT='
+function generate_query(ripper,offset) {
+  NF = NF - offset;
+  for (i = NF; i > 0; --i) {
+    # Omit: release year
+    if ($i ~ /^\(*(19|20)[0-9]{2}\)*$/) {
+      break;
+    }
+    # Add: Rip Source
+    else if (toupper($i) ~ /^(BD|BDRIP|DVD|DVD5|DVD9|D5|D9|2D5|HDTV|HDRIP|HDTVRIP)$/)
+      printf("%s+",$i);
+    # Add: releasing package: skip iNT
+    else if (toupper($i) ~ /^(MINISD|HALFCD)$/)
+      printf("%s+",$i);
+  }
+
+  if (($1 $2 $3) ~ /\<[0-9]{6}\>/)
+    k = 4;
+  else
+    k = 1;
+
+  for (j=k;j<i;++j)
+    printf("%s+",$j);
+
+  printf("%s\n",ripper);
+}
+BEGIN {
+  FS = "[.-]"
+}
+{
+  offset_ub = 3<NF ? 3 : NF;
+  for (offset=0;offset<offset_ub;++offset) {
+    if (toupper($(NF-offset)) ~ /\<TLF\>/) {
+      generate_query("TLF",offset);
+      break;
+    }
+    else if (toupper($(NF-offset)) ~ /\<CHD\>/) {
+      generate_query("CHD",offset);
+      break;
+    }
+  } 
+}
+'
+    local RES=$(gawk -W re-interval "$AWKSCRIPT" <<< "$FILENAME")
+    [[ "$RES" == "" ]] && RES=$(gawk -W re-interval "$AWKSCRIPT" <<< "$DIRNAME")
+
+    echo "$RES"
+}
+
+## subtitle auto-fetching
+fetch_subtitle () {
+    ### helper function
+    try () {
+        is_debug && return 0
+
+        exec 2>/dev/null
+        case "$1" in
+            wait)
+                local len=$2
+                for ((i=0; i<$(( len/100 )); ++i)); do
+                    kill -0 $COPROC_PID && sleep 0.1 || return 1
+                done
+                ;;
+            cmd)
+                kill -0 $COPROC_PID && echo "$2" >>$FIFO || return 1
+                ;;
+            *)
+        esac
+    }
+    ## load subtitles
+    load_subs () {
+        set -- $(find "${SUBTITLES_DIR}/${FILEID}" -iregex '.*[srt|ass]$')
+        [[ "$#" -eq 0 ]] &&return 1
+        
+        while [[ "$#" -gt 0 ]]; do
+            try cmd "sub_load $1"
+            shift
+        done
+        
+        try cmd "sub_file 0"
+    }
+
+    ## wait for MPlayer being ready
+    try wait 3000
+
+    try cmd "osd_show_text 'Try to load local subtitles...' 1500"
+    try wait 1500
+
+    local QUERY_STRING=$(gen_query)
+    if [[ "$QUERY_STRING" == "" ]]; then
+        try cmd "osd_show_text 'No rule to generate query string for the file...' 4000"
+        return 1
+    fi
+
+    ### FILEID as key
+    # Do we have a record for it?
+    local FILEID_CACHE="$SUBTITLES_DIR"/fileid
+    [[ -f ${FILEID_CACHE} ]] || touch ${FILEID_CACHE}
+    local FILEID=$(grep -F "$QUERY_STRING" "${FILEID_CACHE}" | uniq | cut -d" " -f2)
+    if [[ "${FILEID}" != "" ]]; then
+        # found a record, so try to load subtitles, and return on success
+        if is_debug; then
+            echo "==============================================================================="
+            echo "found a record in cache with"
+            echo "   QUERY_STRING=\"${QUERY_STRING}\""
+            echo "   FILEID=\"${FILEID}\""
+            return 0
+        else
+            load_subs && return 0
+        fi
+    fi
+    # some remote queries
+    try cmd "osd_show_text 'Query for remote subtitle fileid...' 4000" || return 1
+    FILEID=$(wget -q -O - "http://www.shooter.com.cn/search/Sub:${QUERY_STRING}" |
+        grep -m1 "local_downfile(this," | sed -ne 's/.*,//; s/).*//p')
+        
+    if [[ "${FILEID}" == "" ]]; then
+        try cmd "osd_show_text 'Network failure or subtitle does not exist...' 6000"
+        return 1
+    else
+        echo "$QUERY_STRING $FILEID" >> ${FILEID_CACHE}
+    fi
+    
+    ### HASH
+    try cmd "osd_show_text 'Get remote file hash...' 4000" || return 1
+    local HASH=$(wget -q -O - "http://www.shooter.com.cn/files/file2.php?hash=duei7chy7gj59fjew73hdwh213f&fileid=${FILEID}")
+    if grep NEEDVCODE <(echo $HASH) >/dev/null 2>&1; then
+        try cmd "osd_show_text 'Rejected by shooter.com.cn because of too frequent queries.' 6000"
+        return 1
+    fi
+
+    ### FILEHASH
+    if [[ $HASH != "" ]]; then
+        local JS='function shtg_calcfilehash(a) { function b(j) { var g = ""; for (var f = 0; f < j.length; f++) { var h = j.charCodeAt(f); g += h + 47 >= 126 ? String.fromCharCode(" ".charCodeAt(0) + (h + 47) % 126) : String.fromCharCode(h + 47); } return g; } function d(g) { var j = g.length; j = j - 1; var h = ""; for (var f = j; f >= 0; f--) { h += g.charAt(f); } return h; } function c(j, h, g, f) { return j.substr(j.length - f + g - h, h) + j.substr(j.length - f, g - h) + j.substr(j.length - f + g, f - g) + j.substr(0, j.length - f); } if (a.length > 32) { switch (a.charAt(0)) { case "o": return b(c(a.substr(1), 8, 17, 27)); break; case "n": return b(d(c(a.substr(1), 6, 15, 17))); break; case "m": return d(c(a.substr(1), 6, 11, 17)); break; case "l": return d(b(c(a.substr(1), 6, 12, 17))); break; case "k": return c(a.substr(1), 14, 17, 24); break; case "j": return c(b(d(a.substr(1))), 11, 17, 27); break; case "i": return c(d(b(a.substr(1))), 5, 7, 24); break; case "h": return c(b(a.substr(1)), 12, 22, 30); break; case "g": return c(d(a.substr(1)), 11, 15, 21); case "f": return c(a.substr(1), 14, 17, 24); case "e": return c(a.substr(1), 4, 7, 22); case "d": return d(b(a.substr(1))); case "c": return b(d(a.substr(1))); case "b": return d(a.substr(1)); case "a": return b(a.substr(1)); break; default:; } } return a; };print(shtg_calcfilehash("'${HASH}'"));'
+        local FILEHASH=$(${JS_CMD} "${JS}" | tail -1);
+    fi
+    is_debug && echo "$QUERY_STRING $FILEID $HASH -> $FILEHASH" && return 0
+#    HASH     --> if7he6223`eheag3b5ga_7hc_5g575236
+#    FILEHASH --> 9f02804d3b826961baae69f7ebadfd8d    
+    
+    ### fetch subtitles
+    # FIXME: what about the non-unrar files?
+    if [[ "${FILEHASH}" != "" ]]; then
+        try cmd "osd_show_text 'Downloading subtitles...'"
+        wget -q -O - 'http://file0.shooter.cn/?hash='${FILEHASH}'&safeway=1' >/tmp/${FILEHASH}.rar
+        unrar t -idq /tmp/${FILEHASH}.rar || return 1
+        mkdir -p "${SUBTITLES_DIR}/$FILEID"
+        unrar e -y -idq /tmp/${FILEHASH}.rar "${SUBTITLES_DIR}/${FILEID}"
+    fi
+
+    load_subs
+}
+
+###########################################
+### start to run the script
+probe_mplayer
+
+# Exit: if called by "midentify"
+if [[ $(basename $0) == "midentify" ]]; then
+    midentify "$@"
+    exit $?
+fi
+
+# normal life
+configure_global "$@"
+
+# file list empty: forward options
+if [[ "${FILES[@]}" == "" ]]; then
+    is_debug && echo "${MPLAYER} ${ORI_OPTS}" || ${MPLAYER} ${ORI_OPTS}
+    exit $?
+fi
+
+# main loop: play each file
+for f in "${FILES[@]}"; do
+    # identify the media
+    configure_local "$f"
+
+    gen_opts
+
+    if is_debug ; then
+        [[ "${CONFIGS_LOCAL[3]}" == yes ]] && fetch_subtitle
+        echo
+        echo "${MPLAYER} ${OPTS[@]} ${ORI_OPTS} $f"
+    else
+        # the coprocess of bash is so stupid!
+        coproc ${MPLAYER} "${OPTS[@]}" ${ORI_OPTS} "$f"
+        
+        # the array COPROC is not inherited to subshell
+        exec 3<&${COPROC[0]}
+        parse_output <&3 &
+
+        [[ "${CONFIGS_LOCAL[3]}" == yes ]] && fetch_subtitle &
+            
+        # Prevent the script from hanging, see ABS Example 11.24
+        wait
+        exec 3<&-
+
+        # read fifo
+        RES=( $(<$FIFO) )
+
+        if [[ ${RES[0]} == "Quit" ]]; then
+            [[ ${CONFIGS_LOCAL[2]} == "yes" ]] && [[ "x${RES[1]}" != "x" ]] && resume save ${RES[1]}
+            break
+        fi
+    fi
+done
+
+exit 0

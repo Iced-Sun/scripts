@@ -1,0 +1,31 @@
+#!/bin/bash
+cd /usr/src/linux
+
+make prepare >/dev/null
+
+RELEASE=`</usr/src/linux/include/config/kernel.release`
+
+echo "Making bzImage...."
+make -j3 || exit
+
+echo "Installing modules...."
+make modules_install >/dev/null
+
+echo "Installing kernel...."
+mount /dev/sda2 /boot
+echo -e "\t`cp -v arch/x86_64/boot/bzImage /boot/vmlinuz-${RELEASE}`"
+echo -e "\t`cp -v .config /boot/config-${RELEASE}`"
+echo -e "\t`cp -v System.map /boot/System.map-${RELEASE}`"
+
+# Only rebuild modules when RELEASE!=unname -r
+if [[ `uname -r` != ${RELEASE} ]]; then 
+echo "Rebuilding modules in portage....(currently noop)"
+#module-rebuild populate
+#module-rebuild rebuild
+fi
+
+echo "Update grub configuration...."
+[[ -f /sbin/grub-mkconfig ]] && /sbin/grub-mkconfig -o /boot/grub/grub.cfg || vi /boot/grub/menu.lst
+
+# done!
+umount /boot

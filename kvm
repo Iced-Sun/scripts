@@ -1,0 +1,21 @@
+#!/bin/bash
+
+KVM="/usr/bin/qemu-kvm -enable-kvm"
+META="-M pc -name WindowsXP"
+CPU="-smp 2"
+MEM="-m 1024"
+DISK="-drive file=/home/subi/winXP.qed,if=virtio,boot=on"
+NET="-net nic,model=virtio -net user"
+BALOON="-balloon virtio"
+VGA="-vga qxl"
+AUDIO="-soundhw ac97"
+#AUDIO="-device intel-hda -device hda-duplex"
+POINTER="-usbdevice tablet"
+SPICE="-spice port=6789,disable-ticketing -device virtio-serial"
+RDP="-net user,hostfwd=tcp::3389-:3389"
+
+modprobe kvm-intel
+pgrep qemu-kvm || ${KVM} ${META} ${CPU} ${MEM} ${DISK} ${NET} ${BALLON} ${VGA} ${AUDIO} ${POINTER} ${SPICE} ${RDP} ${VNC} -rtc base=localtime -daemonize &
+#sudo ${KVM} ${META} ${CPU} ${MEM} ${HDA} ${USB} ${NET} -localtime #-usbdevice host:1483:c007
+
+exec spicec --host localhost --port 6789

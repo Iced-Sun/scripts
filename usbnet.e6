@@ -1,0 +1,11 @@
+#!/bin/bash
+[[ ${LOGNAME} != "root" ]] && echo Root privilige required! && exit 1
+
+[[ -z `ifconfig usb0 | grep 192.168.1.1` ]] && ifconfig usb0 192.168.1.1 netmask 255.255.255.0 mtu 900
+
+#[[ ! -f /dev/ttyACM0 ]] && echo USBNet is not ready! && exit 1
+#[[ `cat /dev/ttyACM0` != "AT+mode=13" ]] && echo "AT+mode=13" > /dev/ttyACM0
+
+[[ -z `cat /proc/mounts | grep usbnet-e6` ]] && mount -t smbfs //192.168.1.2/system /media/network/usbnet-e6 -o codepage=cp936,unicode,uid=subi,password=
+
+echo MotoE6 has configured with the IP 192.168.1.2 and mounted at /media/network/usbnet-e6, try telnet.
