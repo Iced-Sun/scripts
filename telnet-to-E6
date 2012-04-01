@@ -1,6 +1,0 @@
-#!/bin/bash
-
-echo "AT+mode=13" > /dev/ttyACM0
-ifconfig usb0 192.168.1.1 netmask 255.255.255.0 mtu 900
-
-telnet 192.168.1.2
