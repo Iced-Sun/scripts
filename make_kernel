@@ -11,14 +11,31 @@ make -j3 || exit
 echo "Installing modules...."
 make modules_install >/dev/null
 
+mount /boot 2>&1 >/dev/null
 echo "Installing kernel...."
-mount /dev/sda2 /boot
 echo -e "\t`cp -v arch/x86_64/boot/bzImage /boot/vmlinuz-${RELEASE}`"
 echo -e "\t`cp -v .config /boot/config-${RELEASE}`"
+echo -e "\t`cp -v /boot/config-${RELEASE} /home/subi/repositories/conf`"
 echo -e "\t`cp -v System.map /boot/System.map-${RELEASE}`"
 
 echo "Update grub configuration...."
-[[ -f /sbin/grub-mkconfig ]] && /sbin/grub-mkconfig -o /boot/grub/grub.cfg || vi /boot/grub/menu.lst
+if [[ -f /sbin/grub-mkconfig ]]; then
+    read -r -d '' DEFAULT <<'EOF'
+GRUB_DEFAULT="1"
+GRUB_TIMEOUT="8"
+GRUB_GFXMODE="1024x768"
+GRUB_TERMINAL_OUTPUT="console"
+LANG="zh_CN"
 
-# done!
+GRUB_DISTRIBUTOR="Exherbo"
+GRUB_CMDLINE_LINUX_DEFAULT="quiet resume=swap:/dev/sda3:0x74c000 printk.time=1"
+GRUB_DISABLE_RECOVERY=true
+
+GRUB_DISABLE_OS_PROBER=true
+EOF
+    eval ${DEFAULT} /sbin/grub-mkconfig -o /boot/grub/grub.cfg
+else
+    ${EDITOR} /boot/grub/grub.cfg
+fi
+
 umount /boot
