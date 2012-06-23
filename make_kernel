@@ -1,24 +1,29 @@
 #!/bin/bash
 [[ -f ./kernel/Makefile ]] && WORK=. || WORK=/usr/src/linux
-cd $WORK
-
-make prepare >/dev/null
-RELEASE=`<${WORK}/include/config/kernel.release`
+pushd $WORK
 
 echo "Making bzImage...."
-make -j3 || exit
+export DISTCC_HOSTS='192.168.6.50,lzo'
+make CC=distcc -j4 || exit
 
-echo "Installing modules...."
-make modules_install >/dev/null
+RELEASE=`<${WORK}/include/config/kernel.release`
 
 mount /boot 2>&1 >/dev/null
 echo "Installing kernel...."
 echo -e "\t`cp -v arch/x86_64/boot/bzImage /boot/vmlinuz-${RELEASE}`"
 echo -e "\t`cp -v .config /boot/config-${RELEASE}`"
-echo -e "\t`cp -v /boot/config-${RELEASE} /home/subi/repositories/conf`"
+echo -e "\t`cp -v .config /home/subi/repositories/conf/$(hostname)-config-${RELEASE}`"
 echo -e "\t`cp -v System.map /boot/System.map-${RELEASE}`"
 
+echo "Installing modules...."
+make modules_install >/dev/null
+
 echo "Update grub configuration...."
+# work around for grub
+pushd /dev
+[[ -e root ]] || ln -s sda2 root
+popd
+
 if [[ -f /sbin/grub-mkconfig ]]; then
     read -r -d '' DEFAULT <<'EOF'
 GRUB_DEFAULT="1"
@@ -28,7 +33,7 @@ GRUB_TERMINAL_OUTPUT="console"
 LANG="zh_CN"
 
 GRUB_DISTRIBUTOR="Exherbo"
-GRUB_CMDLINE_LINUX_DEFAULT="quiet resume=swap:/dev/sda3:0x74c000 printk.time=1"
+GRUB_CMDLINE_LINUX="quiet resume=swap:/dev/sda3:0x74c000 printk.time=1"
 GRUB_DISABLE_RECOVERY=true
 
 GRUB_DISABLE_OS_PROBER=true
