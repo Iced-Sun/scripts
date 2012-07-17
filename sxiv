@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+
+DIR=$(dirname "$1")
+FILE="$1"
+
+shopt -s nocaseglob
+set -- ${DIR}/*.${1##*.}
+while [[ $# -gt 0 ]]; do
+    [[ "$FILE" == "$1"  ]] && break || shift;
+done
+/usr/bin/sxiv "$@"
