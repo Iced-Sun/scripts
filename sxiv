@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 
+# TODO: use python!
+[[ ! -e "$1" ]] && /usr/bin/sxiv "$@" && exit
+
 DIR=$(dirname "$1")
-FILE="$1"
+FILE=$(basename "$1")
+
+pushd ${DIR} >/dev/null
 
 shopt -s nocaseglob
-set -- ${DIR}/*.${1##*.}
+set -- *.${1##*.}
 while [[ $# -gt 0 ]]; do
-    [[ "$FILE" == "$1"  ]] && break || shift;
+    [[ "$FILE" = "$1"  ]] && break || shift;
 done
-/usr/bin/sxiv "$@"
+
+/usr/bin/sxiv -d "$@"
+
+popd >/dev/null
