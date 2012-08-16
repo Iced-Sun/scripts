@@ -1,31 +1,46 @@
 #!/bin/bash
-[[ -f ./kernel/Makefile ]] && WORK=. || WORK=/usr/src/linux
-pushd $WORK
 
-echo "Making bzImage...."
-export DISTCC_HOSTS='192.168.6.50,lzo'
-make CC=distcc -j4 || exit
+function build_kernel()
+{
+    [[ -f ./kernel/Makefile ]] && WORK=. || WORK=/usr/src/linux
+    pushd $WORK >/dev/null
 
-RELEASE=`<${WORK}/include/config/kernel.release`
+    echo "Making bzImage...."
+    export DISTCC_HOSTS='192.168.6.50,lzo'
+    if make CC=distcc -j4; then
+	RELEASE=`<${WORK}/include/config/kernel.release`
+	popd  >/dev/null
+	return 0
+    else
+	popd  >/dev/null
+	return 1
+    fi
+}
 
-mount /boot 2>&1 >/dev/null
-echo "Installing kernel...."
-echo -e "\t`cp -v arch/x86_64/boot/bzImage /boot/vmlinuz-${RELEASE}`"
-echo -e "\t`cp -v .config /boot/config-${RELEASE}`"
-echo -e "\t`cp -v .config /home/subi/repositories/conf/$(hostname)-config-${RELEASE}`"
-echo -e "\t`cp -v System.map /boot/System.map-${RELEASE}`"
+function install_kernel()
+{
+    echo "Installing kernel...."
+    echo -e "\t`cp -v arch/x86_64/boot/bzImage /boot/vmlinuz-${RELEASE}`"
+    echo -e "\t`cp -v .config /boot/config-${RELEASE}`"
+    echo -e "\t`cp -v .config /home/subi/repositories/conf/$(hostname)-config-${RELEASE}`"
+    echo -e "\t`cp -v System.map /boot/System.map-${RELEASE}`"
 
-echo "Installing modules...."
-make modules_install >/dev/null
+    echo "Installing modules...."
+    make modules_install >/dev/null
+}
 
-echo "Update grub configuration...."
-# work around for grub
-pushd /dev
-[[ -e root ]] || ln -s sda2 root
-popd
+function do_grub_mkconfig()
+{
+    echo "Update grub configuration using grub-mkconfig...."
 
-if [[ -f /sbin/grub-mkconfig ]]; then
-    read -r -d '' DEFAULT <<'EOF'
+    # workaround for grub
+    pushd /dev
+    [[ -e root ]] || ln -s sda2 root
+    popd
+
+    # set environment for grub_mkconfig
+    local DEFAULT
+    read -r -d '' DEFAULT <<EOF
 GRUB_DEFAULT="1"
 GRUB_TIMEOUT="8"
 GRUB_GFXMODE="1024x768"
@@ -33,14 +48,81 @@ GRUB_TERMINAL_OUTPUT="console"
 LANG="zh_CN"
 
 GRUB_DISTRIBUTOR="Exherbo"
-GRUB_CMDLINE_LINUX="quiet resume=swap:/dev/sda3:0x74c000 printk.time=1"
+GRUB_CMDLINE_LINUX="${KERNEL_OPTS}"
 GRUB_DISABLE_RECOVERY=true
 
 GRUB_DISABLE_OS_PROBER=true
 EOF
-    eval ${DEFAULT} /sbin/grub-mkconfig -o /boot/grub/grub.cfg
+    eval ${DEFAULT} /sbin/grub-mkconfig -o ${GRUB_CONFIG}
+
+    unlink /dev/root
+}
+
+function do_my_grub_config()
+{
+    generate_boot_entry
+    generate_rescue_entry
+}
+
+function generate_boot_entry()
+{
+    cat <<EOF
+set timeout=8
+EOF
+
+    for kernel in `ls /boot/vmlinuz* |sort -r`; do
+	kernel=`basename ${kernel}`
+	release=${kernel#vmlinuz-}
+	cat <<EOF
+menuentry 'Exherbo GNU/Linux, with Linux ${release}' --class exherbo --class gnu-linux --class gnu --class os {
+        set root='${BOOT_DEVICE}'
+        search --no-floppy --fs-uuid --set=root ${BOOT_DEVICE_UUID}
+        echo    'Loading Linux ${release} ...'
+        linux   /vmlinuz-${release} ${LINUX_DEVICE} ${KERNEL_OPTS}
+}
+EOF
+    done
+}
+
+function generate_rescue_entry()
+{
+    [[ -d /boot/sysrcd ]] || return 0
+    
+    cat <<EOF
+menuentry 'Boot existing Linux System' {
+ set root='${BOOT_DEVICE}'
+ search --no-floppy --fs-uuid --set=root ${BOOT_DEVICE_UUID}
+ echo    'Loading Linux SystemRescueCd ...'
+ linux /sysrcd/altker64 setkmap=dvorak root=auto
+ initrd /sysrcd/initram.igz
+}
+menuentry 'System Rescue CD' {
+ set root='${BOOT_DEVICE}'
+ search --no-floppy --fs-uuid --set=root ${BOOT_DEVICE_UUID}
+ echo    'Loading Linux SystemRescueCd ...'
+ linux /sysrcd/altker64 subdir=/sysrcd setkmap=dvorak docache dostartx
+ initrd /sysrcd/initram.igz
+}
+EOF
+}
+
+GRUB_CONFIG=/boot/grub2/grub.cfg
+BOOT_DEVICE="(hd0,msdos1)"
+BOOT_DEVICE_UUID="0a43ecb2-a6f2-4cd1-8265-1c21050065c6"
+LINUX_DEVICE="root=/dev/sda2 ro"
+KERNEL_OPTS="quiet resume=swap:/dev/sda3:0x74c000 printk.time=1"
+
+build_kernel || exit 1
+
+mount /boot 2>&1 >/dev/null
+
+install_kernel
+
+if [[ -e /sbin/grub-mkconfig ]] ; then
+    do_grub_mkconfig
 else
-    ${EDITOR} /boot/grub/grub.cfg
+    do_my_grub_config > ${GRUB_CONFIG}
+#    ${EDITOR} ${GRUB_CONFIG}
 fi
 
-umount /boot
+umount /boot 2>&1 >/dev/null
