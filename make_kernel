@@ -1,5 +1,11 @@
 #!/bin/bash
 
+GRUB_CONFIG=/boot/grub2/grub.cfg
+BOOT_DEVICE="(hd0,msdos1)"
+BOOT_DEVICE_UUID="0a43ecb2-a6f2-4cd1-8265-1c21050065c6"
+LINUX_DEVICE="root=/dev/sda2 ro"
+KERNEL_OPTS="resume=swap:/dev/sda3:0x74c000 printk.time=1"
+
 function build_kernel()
 {
     [[ -f ./kernel/Makefile ]] && WORK=. || WORK=/usr/src/linux
@@ -68,6 +74,12 @@ function generate_boot_entry()
 {
     cat <<EOF
 set timeout=8
+set default=1
+
+menuentry 'Windows' {
+        search --no-floppy --file --set=root /bootmgr
+        chainloader +1
+}
 EOF
 
     for kernel in `ls /boot/vmlinuz* |sort -r`; do
@@ -105,12 +117,6 @@ menuentry 'System Rescue CD' {
 }
 EOF
 }
-
-GRUB_CONFIG=/boot/grub2/grub.cfg
-BOOT_DEVICE="(hd0,msdos1)"
-BOOT_DEVICE_UUID="0a43ecb2-a6f2-4cd1-8265-1c21050065c6"
-LINUX_DEVICE="root=/dev/sda2 ro"
-KERNEL_OPTS="quiet resume=swap:/dev/sda3:0x74c000 printk.time=1"
 
 build_kernel || exit 1
 
