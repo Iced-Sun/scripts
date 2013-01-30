@@ -4,7 +4,7 @@ GRUB_CONFIG=/boot/grub2/grub.cfg
 BOOT_DEVICE="(hd0,msdos1)"
 BOOT_DEVICE_UUID="0a43ecb2-a6f2-4cd1-8265-1c21050065c6"
 LINUX_DEVICE="root=/dev/sda2 ro"
-KERNEL_OPTS="resume=swap:/dev/sda3:0x74c000 printk.time=1"
+KERNEL_OPTS="resume=swap:/dev/sda3:0x9568000 loglevel=3 printk.time=1"
 
 function build_kernel()
 {
