@@ -14,6 +14,6 @@ while [[ $# -gt 0 ]]; do
     [[ "$FILE" = "$1"  ]] && break || shift;
 done
 
-/usr/bin/sxiv -d "$@"
+/usr/bin/sxiv -d -- "$@"
 
 popd >/dev/null

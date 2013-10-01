@@ -1,6 +1,6 @@
 #!/bin/bash
 
-GRUB_CONFIG=/boot/grub2/grub.cfg
+GRUB_CONFIG=/boot/grub/grub.cfg
 BOOT_DEVICE="(hd0,msdos1)"
 BOOT_DEVICE_UUID="0a43ecb2-a6f2-4cd1-8265-1c21050065c6"
 LINUX_DEVICE="root=/dev/sda2 ro"
@@ -19,8 +19,9 @@ function build_kernel()
     pushd $WORK >/dev/null
 
     echo "Making bzImage...."
-    export DISTCC_HOSTS='192.168.6.50,lzo'
-    if make CC=distcc -j4; then
+    export PATH="/usr/libexec/distcc:${PATH}"
+    export DISTCC_HOSTS='10.2.112.51,lzo'
+    if make CC=x86_64-pc-linux-gnu-gcc -j4; then
 	RELEASE=`<${WORK}/include/config/kernel.release`
 	popd  >/dev/null
 	return 0
@@ -40,6 +41,8 @@ function install_kernel()
 
     echo "Installing modules...."
     make modules_install >/dev/null
+
+    which dracut 2>&1 >/dev/null && dracut --force /boot/initramfs-${RELEASE}.img ${RELEASE} #&& rm -rf /lib/modules/${RELEASE}
 }
 
 function do_grub_mkconfig()
@@ -73,9 +76,39 @@ EOF
 
 function do_my_grub_config()
 {
-    cat <<EOF
-set timeout=8
+    cat <<'EOF'
+if [ -s $prefix/grubenv ]; then
+  load_env
+fi
+
+function load_video {
+  if [ x$feature_all_video_module = xy ]; then
+    insmod all_video
+  else
+    insmod efi_gop
+    insmod efi_uga
+    insmod ieee1275_fb
+    insmod vbe
+    insmod vga
+    insmod video_bochs
+    insmod video_cirrus
+  fi
+}
+
+if loadfont unicode ; then
+  set gfxmode=auto
+  set gfxpayload=keep
+  load_video
+  insmod gfxterm
+  set locale_dir=$prefix/locale
+  set lang=zh_CN
+  insmod gettext
+fi
+terminal_output gfxterm
+
 set default=0
+set timeout=8
+set pager=1
 EOF
 
 #    generate_windows_entry
@@ -104,6 +137,7 @@ menuentry 'Exherbo GNU/Linux, with Linux ${release}' --class exherbo --class gnu
  search --no-floppy --fs-uuid --set=root ${BOOT_DEVICE_UUID}
  echo    'Loading Linux ${release} ...'
  linux   /vmlinuz-${release} ${LINUX_DEVICE} ${KERNEL_OPTS}
+ initrd  /initramfs-${release}.img
 }
 EOF
     done
@@ -114,19 +148,19 @@ function generate_rescue_entry()
     [[ -d /boot/sysrcd ]] || return 0
     
     cat <<EOF
-menuentry 'Boot existing Linux System' {
+menuentry 'Boot existing Linux System with SysResCD Kernel' {
  set root='${BOOT_DEVICE}'
  search --no-floppy --fs-uuid --set=root ${BOOT_DEVICE_UUID}
- echo    'Loading Linux SystemRescueCd ...'
+ echo    'Loading SysResCD kernel ...'
  linux /sysrcd/altker64 setkmap=dvorak root=auto
  initrd /sysrcd/initram.igz
 }
-menuentry 'System Rescue CD' {
+menuentry 'Parted Magic Rescue CD' {
  set root='${BOOT_DEVICE}'
  search --no-floppy --fs-uuid --set=root ${BOOT_DEVICE_UUID}
- echo    'Loading Linux SystemRescueCd ...'
- linux /sysrcd/altker64 subdir=/sysrcd setkmap=dvorak docache dostartx
- initrd /sysrcd/initram.igz
+ echo    'Loading Parted Magic ...'
+ linux /pmagic/bzImage directory= edd=on vmalloc=384MiB keymap=dvorak zh_CN
+ initrd /pmagic/initrd.img
 }
 EOF
 }
