@@ -20,8 +20,14 @@ function build_kernel()
 
     echo "Making bzImage...."
     export PATH="/usr/libexec/distcc:${PATH}"
-    export DISTCC_HOSTS='10.2.112.51,lzo'
-    if make CC=x86_64-pc-linux-gnu-gcc -j4; then
+    export DISTCC_HOSTS='10.2.112.2,lzo'
+    if make HOSTCC=x86_64-pc-linux-gnu-gcc \
+	    CC=x86_64-pc-linux-gnu-gcc \
+	    AR=x86_64-pc-linux-gnu-ar \
+	    NM=x86_64-pc-linux-gnu-nm \
+	    OBJCOPY=x86_64-pc-linux-gnu-objcopy \
+	    OBJDUMP=x86_64-pc-linux-gnu-objdump \
+	    LD=x86_64-pc-linux-gnu-ld -j1; then
 	RELEASE=`<${WORK}/include/config/kernel.release`
 	popd  >/dev/null
 	return 0
