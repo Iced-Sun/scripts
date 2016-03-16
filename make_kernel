@@ -154,19 +154,19 @@ function generate_rescue_entry()
     [[ -d /boot/sysrcd ]] || return 0
     
     cat <<EOF
+menuentry 'SysResCD' {
+ set root='${BOOT_DEVICE}'
+ search --no-floppy --fs-uuid --set=root ${BOOT_DEVICE_UUID}
+ echo    'Loading SysResCD kernel ...'
+ linux /sysrcd/altker64 setkmap=dvorak subdir=/sysrcd
+ initrd /sysrcd/initram.igz
+}
 menuentry 'Boot existing Linux System with SysResCD Kernel' {
  set root='${BOOT_DEVICE}'
  search --no-floppy --fs-uuid --set=root ${BOOT_DEVICE_UUID}
  echo    'Loading SysResCD kernel ...'
  linux /sysrcd/altker64 setkmap=dvorak root=auto
  initrd /sysrcd/initram.igz
-}
-menuentry 'Parted Magic Rescue CD' {
- set root='${BOOT_DEVICE}'
- search --no-floppy --fs-uuid --set=root ${BOOT_DEVICE_UUID}
- echo    'Loading Parted Magic ...'
- linux /pmagic/bzImage directory= edd=on vmalloc=384MiB keymap=dvorak zh_CN
- initrd /pmagic/initrd.img
 }
 EOF
 }
