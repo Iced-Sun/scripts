@@ -3,8 +3,8 @@
 GRUB_CONFIG=/boot/grub/grub.cfg
 BOOT_DEVICE="(hd0,msdos1)"
 BOOT_DEVICE_UUID="0a43ecb2-a6f2-4cd1-8265-1c21050065c6"
-LINUX_DEVICE="root=/dev/sda2 ro"
-KERNEL_OPTS="loglevel=3 printk.time=1"
+LINUX_DEVICE="root=/dev/sda2 ro rootflags=subvol=@"
+KERNEL_OPTS=""
 
 TOI_HEADER="/sys/power/tuxonice/swap/headerlocations"
 if [[ -f "${TOI_HEADER}" ]]; then
