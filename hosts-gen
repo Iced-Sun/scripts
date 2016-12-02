@@ -1,0 +1,32 @@
+#!/usr/bin/env sh
+# -*- coding: utf-8 -*-
+
+function my_config() {
+		cat <<EOF
+# /etc/hosts: Local Host Database
+#
+# This file describes a number of aliases-to-address mappings for the for
+# local hosts that share this file.
+#
+# In the presence of the domain name service or NIS, this file may not be
+# consulted at all; see /etc/host.conf for the resolution order.
+#
+
+# IPv4 and IPv6 localhost aliases
+# fix ORA 21561
+127.0.0.1	localhost	laptop-x61
+::1		localhost	laptop-x61
+
+fdad:1f8e:ba19::120:5:137	SX-5-137
+EOF
+}
+
+function google_hosts() {
+		echo
+		echo "Google hosts from https://github.com/racaljk/hosts/raw/master/hosts"
+
+    wget --tries=10 -q -O - https://github.com/racaljk/hosts/raw/master/hosts
+}
+
+my_config > /etc/hosts
+google_hosts >> /etc/hosts
