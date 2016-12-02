@@ -1,7 +1,5 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
-from __future__ import unicode_literals
 
 from freetype import *
 import os,re,sys
@@ -56,6 +54,7 @@ class Name_Translator(object):
         
     def property(self):
         return self.__name, self.__platform, self.__property
+    pass
 
 def gather_info(font_filepath):
     face = Face(font_filepath)
@@ -69,10 +68,12 @@ def rename(font_filepath):
     ps_name = ''
     family = ''
     version =''
-    for i in gather_info(font_filepath.encode(sys.getfilesystemencoding())):
+    for i in gather_info(font_filepath):
         if i[0] == 'PS name' and not ps_name:
             ps_name = i[2]
         elif i[0] == 'Family' and (i[1] == 'Microsoft' or not family):
+            family = i[2]
+        elif i[0] == 'Preferred Family' and i[1] == 'Microsoft':
             family = i[2]
         elif i[0] == 'Version' and not version:
             match = re.search('\d[.\d]*',i[2])
@@ -84,15 +85,15 @@ def rename(font_filepath):
     
     new_fontpath = os.path.join(font_dir,'{}_{}_{}{}'.format(ps_name, family, version, ext))
     if font_filepath == new_fontpath:
-        print os.path.split(font_filepath)[1]
+        print(os.path.split(font_filepath)[1])
     else:
-        print os.path.split(font_filepath)[1] + '  ---->  ', os.path.split(new_fontpath)[1]
+        print(os.path.split(font_filepath)[1] + '  ---->  ', os.path.split(new_fontpath)[1])
         os.rename(font_filepath, new_fontpath)
 
 if __name__ == '__main__':
-    args = [arg.decode(sys.getfilesystemencoding()) for arg in sys.argv]
+    args = [arg for arg in sys.argv]
     if args[1] == '--rename':
-        path = args[2].decode(sys.getfilesystemencoding())
+        path = args[2]
         if os.path.isdir(path):
             for root,dirs,files in os.walk(path):
                 for f in files:
@@ -103,6 +104,6 @@ if __name__ == '__main__':
         else:
             rename(os.path.abspath(path))
     else:
-        path = args[1].decode(sys.getfilesystemencoding())
+        path = args[1]
         for name,platform,prop in gather_info(path):
-            print '{:36}{}'.format( '{} ({}):'.format(name,platform), prop )
+            print('{:36}{}'.format( '{} ({}):'.format(name,platform), prop ))
