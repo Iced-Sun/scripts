@@ -42,7 +42,7 @@ function install_kernel()
     echo "Installing modules...."
     make modules_install >/dev/null
 
-    which dracut 2>&1 >/dev/null && dracut --force /boot/initramfs-${RELEASE}.img ${RELEASE} #&& rm -rf /lib/modules/${RELEASE}
+    which dracut 2>&1 >/dev/null && dracut --xz --force /boot/initramfs-${RELEASE}.img ${RELEASE} #&& rm -rf /lib/modules/${RELEASE}
 }
 
 function do_grub_mkconfig()
