@@ -146,7 +146,7 @@ EOF
 function generate_rescue_entry()
 {
     [[ -d /boot/sysrcd ]] || return 0
-    
+
     cat <<EOF
 menuentry 'SysResCD' {
  set root='${BOOT_DEVICE}'
