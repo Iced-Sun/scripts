@@ -1,77 +1,39 @@
 #!/bin/bash
 
 GRUB_CONFIG=/boot/grub/grub.cfg
-BOOT_DEVICE="(hd0,msdos1)"
-BOOT_DEVICE_UUID="0a43ecb2-a6f2-4cd1-8265-1c21050065c6"
-LINUX_DEVICE="root=/dev/sda2 ro rootflags=subvol=@"
+BOOT_DEVICE="(hd0,gpt1)"
+BOOT_DEVICE_UUID="1D89-D9BA"
+LINUX_DEVICE="root=/dev/nvme0n1p2 ro rootflags=subvol=machines/exherbo"
 KERNEL_OPTS=""
-
-TOI_HEADER="/sys/power/tuxonice/swap/headerlocations"
-if [[ -f "${TOI_HEADER}" ]]; then
-    STRING=`<${TOI_HEADER}`
-    OPT=`echo ${STRING} | cut -d= -f2`
-    [[ "${STRING}" != "${OPT}" ]] && KERNEL_OPTS+=" resume=${OPT%.}"
-fi
 
 function build_kernel()
 {
-    [[ -f ./kernel/Makefile ]] && WORK=. || WORK=/usr/src/linux
-    pushd $WORK >/dev/null
-
-    echo "Making bzImage...."
-    export PATH="/usr/libexec/distcc:${PATH}"
-    export DISTCC_HOSTS='10.2.112.3,lzo'
-    if make -j8; then
-	RELEASE=`<${WORK}/include/config/kernel.release`
-	popd  >/dev/null
-	return 0
-    else
-	popd  >/dev/null
-	return 1
-    fi
+	echo "Making bzImage...."
+	export PATH="/usr/libexec/distcc:${PATH}"
+	export DISTCC_HOSTS='10.2.112.3,lzo'
+	if make -j6; then
+		RELEASE=`<${WORK}/include/config/kernel.release`
+		return 0
+	else
+		return 1
+	fi
 }
 
 function install_kernel()
 {
-    echo "Installing kernel...."
-    echo -e "\t`cp -v arch/x86_64/boot/bzImage /boot/vmlinuz-${RELEASE}`"
-    echo -e "\t`cp -v .config /boot/config-${RELEASE}`"
-    echo -e "\t`cp -v .config /data/repositories/conf/$(hostname)-config-${RELEASE}`"
-    echo -e "\t`cp -v System.map /boot/System.map-${RELEASE}`"
+	echo "Installing kernel...."
+	echo -e "\t`cp -v arch/x86_64/boot/bzImage /boot/exherbo/vmlinuz-${RELEASE}`"
+	echo -e "\t`cp -v .config /boot/exherbo/config-${RELEASE}`"
+	echo -e "\t`cp -v .config /data/repositories/conf/$(hostname)-config-${RELEASE}`"
+	echo -e "\t`cp -v System.map /boot/exherbo/System.map-${RELEASE}`"
 
-    echo "Installing modules...."
-    make modules_install >/dev/null
+	echo "Installing modules...."
+	make modules_install >/dev/null
 
-    which dracut 2>&1 >/dev/null && dracut --xz --force /boot/initramfs-${RELEASE}.img ${RELEASE} #&& rm -rf /lib/modules/${RELEASE}
-}
+	echo "Installing Intel microcode..."
+	echo -e "\t`cp -v /lib/firmware/microcode.cpio /boot/microcode.cpio`"
 
-function do_grub_mkconfig()
-{
-    echo "Update grub configuration using grub-mkconfig...."
-
-    # workaround for grub
-    pushd /dev
-    [[ -e root ]] || ln -s sda2 root
-    popd
-
-    # set environment for grub_mkconfig
-    local DEFAULT
-    read -r -d '' DEFAULT <<EOF
-GRUB_DEFAULT="1"
-GRUB_TIMEOUT="8"
-GRUB_GFXMODE="1024x768"
-GRUB_TERMINAL_OUTPUT="console"
-LANG="zh_CN"
-
-GRUB_DISTRIBUTOR="Exherbo"
-GRUB_CMDLINE_LINUX="${KERNEL_OPTS}"
-GRUB_DISABLE_RECOVERY=true
-
-GRUB_DISABLE_OS_PROBER=true
-EOF
-    eval ${DEFAULT} /sbin/grub-mkconfig -o ${GRUB_CONFIG}
-
-    unlink /dev/root
+	which dracut 2>&1 >/dev/null && dracut --xz --force /boot/exherbo/initramfs-${RELEASE}.img ${RELEASE}
 }
 
 function do_my_grub_config()
@@ -128,16 +90,21 @@ EOF
 
 function generate_linux_entry()
 {
-    for kernel in `ls /boot/vmlinuz* |sort -r`; do
-	kernel=`basename ${kernel}`
-	release=${kernel#vmlinuz-}
-	cat <<EOF
+		for kernel in `ls /boot/exherbo/vmlinuz* |sort -Vr`; do
+				kernel=`basename ${kernel}`
+				release=${kernel#vmlinuz-}
+				cat <<EOF
 menuentry 'Exherbo GNU/Linux, with Linux ${release}' --class exherbo --class gnu-linux --class gnu --class os {
- set root='${BOOT_DEVICE}'
- search --no-floppy --fs-uuid --set=root ${BOOT_DEVICE_UUID}
- echo    'Loading Linux ${release} ...'
- linux   /vmlinuz-${release} ${LINUX_DEVICE} ${KERNEL_OPTS}
- initrd  /initramfs-${release}.img
+  load_video
+  insmod gzio
+  insmod part_gpt
+  insmod fat
+  set root='${BOOT_DEVICE}'
+  search --no-floppy --fs-uuid --set=root ${BOOT_DEVICE_UUID}
+  echo    'Loading Linux ${release}...'
+  linux   /exherbo/vmlinuz-${release} ${LINUX_DEVICE} ${KERNEL_OPTS}
+  echo    'Loading initial ramdisk...'
+  initrd  /exherbo/microcode.cpio /exherbo/initramfs-${release}.img
 }
 EOF
     done
@@ -145,37 +112,40 @@ EOF
 
 function generate_rescue_entry()
 {
-    [[ -d /boot/sysrcd ]] || return 0
+  [[ -d /boot/sysrcd ]] || return 0
 
-    cat <<EOF
+  cat <<EOF
 menuentry 'SysResCD' {
  set root='${BOOT_DEVICE}'
  search --no-floppy --fs-uuid --set=root ${BOOT_DEVICE_UUID}
  echo    'Loading SysResCD kernel ...'
- linux /sysrcd/altker64 setkmap=dvorak subdir=/sysrcd
- initrd /sysrcd/initram.igz
+ # subdir=/sysrcd
+ linux /sysrcd/vmlinuz archisobasedir=sysrcd archisolabel=RESCUE804 copytoram setkmap=dvorak
+ initrd /sysrcd/intel_ucode.img /sysrcd/amd_ucode.img /sysrcd/sysresccd.img
 }
 menuentry 'Boot existing Linux System with SysResCD Kernel' {
  set root='${BOOT_DEVICE}'
  search --no-floppy --fs-uuid --set=root ${BOOT_DEVICE_UUID}
  echo    'Loading SysResCD kernel ...'
- linux /sysrcd/altker64 setkmap=dvorak root=auto
- initrd /sysrcd/initram.igz
+ linux /sysrcd/vmlinuz archisobasedir=sysrcd archisolabel=RESCUE804 findroot setkmap=dvorak
+ initrd /sysrcd/intel_ucode.img /sysrcd/amd_ucode.img /sysrcd/sysresccd.img
 }
 EOF
 }
 
+[[ -f ./kernel/Makefile ]] && WORK=. || WORK=/usr/src/linux
+pushd $WORK >/dev/null
 build_kernel || exit 1
-
 mount /boot 2>&1 >/dev/null
-
 install_kernel
+popd  >/dev/null
 
 if [[ -e /sbin/grub-mkconfig ]] ; then
-    do_grub_mkconfig
+	do_my_grub_config > ${GRUB_CONFIG}
+	#do_grub_mkconfig
 else
-    do_my_grub_config > ${GRUB_CONFIG}
-#    ${EDITOR} ${GRUB_CONFIG}
+	do_my_grub_config > ${GRUB_CONFIG}
+	#    ${EDITOR} ${GRUB_CONFIG}
 fi
 
 umount /boot 2>&1 >/dev/null
