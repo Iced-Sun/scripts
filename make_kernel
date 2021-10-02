@@ -90,10 +90,10 @@ EOF
 
 function generate_linux_entry()
 {
-		for kernel in `ls /boot/exherbo/vmlinuz* |sort -Vr`; do
-				kernel=`basename ${kernel}`
-				release=${kernel#vmlinuz-}
-				cat <<EOF
+	for kernel in `ls /boot/exherbo/vmlinuz* |sort -Vr`; do
+		kernel=`basename ${kernel}`
+		release=${kernel#vmlinuz-}
+		cat <<EOF
 menuentry 'Exherbo GNU/Linux, with Linux ${release}' --class exherbo --class gnu-linux --class gnu --class os {
   load_video
   insmod gzio
@@ -101,34 +101,44 @@ menuentry 'Exherbo GNU/Linux, with Linux ${release}' --class exherbo --class gnu
   insmod fat
   set root='${BOOT_DEVICE}'
   search --no-floppy --fs-uuid --set=root ${BOOT_DEVICE_UUID}
-  echo    'Loading Linux ${release}...'
-  linux   /exherbo/vmlinuz-${release} ${LINUX_DEVICE} ${KERNEL_OPTS}
-  echo    'Loading initial ramdisk...'
-  initrd  /exherbo/microcode.cpio /exherbo/initramfs-${release}.img
+  echo   'Loading Linux ${release}...'
+  linux  /exherbo/vmlinuz-${release} ${LINUX_DEVICE} ${KERNEL_OPTS}
+  echo   'Loading initial ramdisk...'
+  initrd /microcode.cpio /exherbo/initramfs-${release}.img
 }
 EOF
-    done
+ done
 }
 
 function generate_rescue_entry()
 {
-  [[ -d /boot/sysrcd ]] || return 0
+	[[ -d /boot/sysrcd ]] || return 0
 
-  cat <<EOF
-menuentry 'SysResCD' {
- set root='${BOOT_DEVICE}'
- search --no-floppy --fs-uuid --set=root ${BOOT_DEVICE_UUID}
- echo    'Loading SysResCD kernel ...'
- # subdir=/sysrcd
- linux /sysrcd/vmlinuz archisobasedir=sysrcd archisolabel=RESCUE804 copytoram setkmap=dvorak
- initrd /sysrcd/intel_ucode.img /sysrcd/amd_ucode.img /sysrcd/sysresccd.img
+	# https://www.system-rescue.org/manual/Installing_SystemRescue_on_the_disk/
+	cat <<EOF
+menuentry 'SystemRescue (isoloop)' {
+  load_video
+  insmod gzio
+  insmod part_gpt
+  insmod fat
+  search --no-floppy --fs-uuid --set=root ${BOOT_DEVICE_UUID}
+  loopback loop /systemrescue.iso
+  echo   'Loading kernel ...'
+  linux  (loop)/sysresccd/boot/x86_64/vmlinuz img_label=boot img_loop=/systemrescue.iso archisobasedir=sysresccd copytoram setkmap=dvorak
+  echo   'Loading initramfs ...'
+  initrd /microcode.cpio (loop)/sysresccd/boot/x86_64/sysresccd.img
 }
-menuentry 'Boot existing Linux System with SysResCD Kernel' {
- set root='${BOOT_DEVICE}'
- search --no-floppy --fs-uuid --set=root ${BOOT_DEVICE_UUID}
- echo    'Loading SysResCD kernel ...'
- linux /sysrcd/vmlinuz archisobasedir=sysrcd archisolabel=RESCUE804 findroot setkmap=dvorak
- initrd /sysrcd/intel_ucode.img /sysrcd/amd_ucode.img /sysrcd/sysresccd.img
+menuentry 'Boot existing Linux System with SystemRescue Kernel (isoloop)' {
+  load_video
+  insmod gzio
+  insmod part_gpt
+  insmod fat
+  search --no-floppy --fs-uuid --set=root ${BOOT_DEVICE_UUID}
+  loopback loop /systemrescue.iso
+  echo   'Loading kernel ...'
+  linux  (loop)/sysresccd/boot/x86_64/vmlinuz img_label=boot img_loop=/systemrescue.iso archisobasedir=sysresccd findroot setkmap=dvorak
+  echo   'Loading initramfs ...'
+  initrd /microcode.cpio (loop)/sysresccd/boot/x86_64/sysresccd.img
 }
 EOF
 }
