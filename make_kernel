@@ -28,12 +28,16 @@ function install_kernel()
 	echo -e "\t`cp -v System.map /boot/exherbo/System.map-${RELEASE}`"
 
 	echo "Installing modules...."
+	# ensure kmod is selected since busybox breaks dracut
+	eclectic alternatives update kmod-tools kmod
 	make modules_install >/dev/null
 
 	echo "Installing Intel microcode..."
 	echo -e "\t`cp -v /lib/firmware/microcode.cpio /boot/microcode.cpio`"
 
-	which dracut 2>&1 >/dev/null && dracut --xz --force /boot/exherbo/initramfs-${RELEASE}.img ${RELEASE}
+	if which dracut 2>&1 >/dev/null; then
+		dracut --xz --force /boot/exherbo/initramfs-${RELEASE}.img ${RELEASE}
+	fi
 }
 
 function do_my_grub_config()
@@ -66,7 +70,8 @@ if loadfont unicode ; then
   set lang=zh_CN
   insmod gettext
 fi
-terminal_output gfxterm
+#terminal_output gfxterm
+terminal_output console
 
 set default=0
 set timeout=8

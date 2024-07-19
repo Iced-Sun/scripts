@@ -17,15 +17,16 @@ function my_config() {
 127.0.0.1	localhost	laptop-x61
 ::1		localhost	laptop-x61
 
+0.0.0.0		account.jetbrains.com
+
 fdad:1f8e:ba19::120:5:137	SX-5-137
 EOF
 }
 
 function google_hosts() {
-		echo
-		echo "Google hosts from https://github.com/racaljk/hosts/raw/master/hosts"
-
-    wget --tries=10 -q -O - https://github.com/racaljk/hosts/raw/master/hosts
+    echo
+    echo "#Google hosts from https://github.com/googlehosts/hosts/raw/master/hosts-files/hosts"
+    wget --tries=10 -q -O - https://github.com/googlehosts/hosts/raw/master/hosts-files/hosts
 }
 
 my_config > /etc/hosts
