@@ -194,33 +194,33 @@ verbose = True
 source_base = '/data/repositories/conf'
 target_base = '/'
 
-source_root = os.path.join(source_base, 'etc')
-target_root = os.path.join(target_base, 'etc')
-
-copy_includes = [
-    'binfmt.d',
-    'env.d',
-    'modules-load.d',
-    'sysctl.d',
-    'systemd/coredump.conf.d',
-    'systemd/network',
-    'tmpfiles.d',
-    'udev',
-] if source_root.endswith('etc') else []
-
 with open('/etc/machine-id') as f:
     machine_id = f.read().strip()
     pass
 
 if __name__ == '__main__':
-    import sys
-
     owner = None
 
-    if len(sys.argv) == 2:
-        source_root = os.path.join(source_base, 'home')
-        target_root = os.path.join(target_base, 'home', sys.argv[1])
-        # owner = sys.argv[1]
+    if os.getuid() == 0:
+        print('Run as root, sync "etc" configurations')
+        source_root = os.path.join(source_base, 'etc')
+        target_root = os.path.join(target_base, 'etc')
         pass
+    else:
+        print('Run as user, sync "home" configurations')
+        source_root = os.path.join(source_base, 'home')
+        target_root = os.path.join(target_base, 'home', os.getlogin())
+        pass
+
+    copy_includes = [
+        'binfmt.d',
+        'env.d',
+        'modules-load.d',
+        'sysctl.d',
+        'systemd/coredump.conf.d',
+        'systemd/network',
+        'tmpfiles.d',
+        'udev',
+    ] if source_root.endswith('etc') else []
 
     check_component(source_root, target_root, '', owner)
