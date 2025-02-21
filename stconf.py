@@ -179,7 +179,7 @@ def check_component(source_root, target_root, component, owner=None):
             pass
         pass
     elif action == 'recur':
-        for sub_component in source_contents:
+        for sub_component in sorted(source_contents):
             check_component(source_root, target_root, os.path.join(component, sub_component), owner)
             continue
         pass
