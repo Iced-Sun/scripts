@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import os, re, shutil
+from pathlib import Path
 
 def check_component(source_root, target_root, component, owner=None):
     print(f'Processing component <{component}>')
@@ -20,18 +21,35 @@ def check_component(source_root, target_root, component, owner=None):
         print(f'++ target: {target_absolute_path}')
         pass
 
-    # source and target content
-    source_contents = set(os.listdir(source_absolute_path)) if os.path.isdir(source_absolute_path) else set()
-    source_has_machine_specific = any(re.match('.*@[0-9a-f]{32}$', c) for c in source_contents)
-    target_contents = set(
-        path for path in os.listdir(target_absolute_path)
-        if not path.startswith('.keep_')
-    ) if os.path.isdir(target_absolute_path) else set()
-    target_contents_has_no_directory = all(os.path.isfile(os.path.join(target_absolute_path, c)) for c in target_contents)
+    # source contents
+    source_contents_recursively = set(
+        str(p.relative_to(source_absolute_path))
+        for p in Path(source_absolute_path).glob('**/*')
+    ) if os.path.isdir(source_absolute_path) else set()
+    source_has_machine_specific_recursively = any(re.match('.*@[0-9a-f]{32}$', str(c)) for c in source_contents_recursively)
+
+    # target contents
+    target_has_different_contents_recursively = False
+    for root, dirs, files in Path(target_absolute_path).walk():
+        dirs = set(str((root / dir).relative_to(target_absolute_path)) for dir in dirs)
+        files = set(str((root / file).relative_to(target_absolute_path)) for file in files if not file.startswith('.keep_'))
+        if dirs | files <= source_contents_recursively:
+            continue
+        else:
+            target_has_different_contents_recursively = True
+            break
+        continue
 
     if verbose:
-        print(f'++ source contents: {source_contents}{"+" if source_has_machine_specific else ""}')
-        print(f'++ target contents: {target_contents}')
+        print(f'++ source contents: {source_contents_recursively}')
+
+        if source_has_machine_specific_recursively:
+            print('  ++ source has machine specific configurations')
+            pass
+
+        if target_has_different_contents_recursively:
+            print('  ++ target has different contents')
+            pass
         pass
 
     # default output state
@@ -84,7 +102,7 @@ def check_component(source_root, target_root, component, owner=None):
             pass
 
         # ensure target is nonexistent for link action
-        if action == 'link' and os.path.exists(target_absolute_path):
+        if action == 'link' and os.path.lexists(target_absolute_path):
             os.unlink(target_absolute_path)
             pass
 
@@ -93,7 +111,7 @@ def check_component(source_root, target_root, component, owner=None):
     elif os.path.isdir(source_absolute_path):
         print(f'== source is directory')
 
-        # always remove target if a directory
+        # always remove target if a file
         if os.path.isfile(target_absolute_path):
             print('== target is file, remove it')
             os.unlink(target_absolute_path)
@@ -107,15 +125,15 @@ def check_component(source_root, target_root, component, owner=None):
         # case 2.2: source could be symlinked
         else:
             # case 2.2.1: source contains machine specific configurations
-            if source_has_machine_specific:
+            if source_has_machine_specific_recursively:
                 action = 'recur'
                 print(f'!! {action}: machine specific configurations found')
                 pass
             # case 2.2.2: source contains no machine specific configurations
             else:
                 # case 2.2.2.1: target is empty
-                # case 2.2.2.2: target has same content and no subdirectory
-                if len(target_contents) == 0 or (target_contents_has_no_directory and target_contents == source_contents):
+                # case 2.2.2.2: target has same contents
+                if target_has_different_contents_recursively == False:
                     print('==== target is empty or same as source')
                     # case 2.2.2.2.1: target links to right place
                     if os.path.realpath(target_absolute_path) == os.path.realpath(source_absolute_path):
@@ -125,7 +143,7 @@ def check_component(source_root, target_root, component, owner=None):
                     # case 2.2.2.2.2: target links to wrong place
                     else:
                         action = 'link'
-                        print(f'!! {action}: target links to wrong source or a plain directory')
+                        print(f'!! {action}: target links to wrong source or a plain directory (manual action may required if target is a directory)')
                         pass
                     pass
                 # case 2.2.2.3: target has different contents
@@ -149,12 +167,12 @@ def check_component(source_root, target_root, component, owner=None):
             pass
 
         # ensure target is nonexistent for link action
-        if action == 'link' and os.path.exists(target_absolute_path):
-            if os.path.isfile(target_absolute_path):
-                os.unlink(target_absolute_path)
-                pass
-            elif os.path.isdir(target_absolute_path):
+        if action == 'link' and os.path.lexists(target_absolute_path):
+            if os.path.isdir(target_absolute_path):
                 os.rmdir(target_absolute_path)
+                pass
+            else:
+                os.unlink(target_absolute_path)
                 pass
             pass
 
@@ -179,7 +197,7 @@ def check_component(source_root, target_root, component, owner=None):
             pass
         pass
     elif action == 'recur':
-        for sub_component in sorted(source_contents):
+        for sub_component in sorted(os.listdir(source_absolute_path)):
             check_component(source_root, target_root, os.path.join(component, sub_component), owner)
             continue
         pass
@@ -189,9 +207,9 @@ def check_component(source_root, target_root, component, owner=None):
 
     return
 
-verbose = True
+verbose = False
 
-source_base = '/data/repositories/conf'
+source_base = '/data/base/system/conf'
 target_base = '/'
 
 with open('/etc/machine-id') as f:
@@ -213,6 +231,7 @@ if __name__ == '__main__':
         pass
 
     copy_includes = [
+        # application requires non-link path
         'binfmt.d',
         'env.d',
         'modules-load.d',
@@ -221,6 +240,10 @@ if __name__ == '__main__':
         'systemd/network',
         'tmpfiles.d',
         'udev',
+        'fstab',
+
+        # exherbo expects directory
+        'sudoers.d',
     ] if source_root.endswith('etc') else []
 
     check_component(source_root, target_root, '', owner)
