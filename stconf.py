@@ -242,6 +242,9 @@ if __name__ == '__main__':
         'udev',
         'fstab',
 
+        # paludis expects directory
+        'paludis/hooks',
+
         # exherbo expects directory
         'sudoers.d',
     ] if source_root.endswith('etc') else []
