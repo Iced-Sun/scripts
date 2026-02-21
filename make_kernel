@@ -1,17 +1,25 @@
 #!/bin/bash
 
+# handler
+INSTALLER=$([[ -d /efi ]] && echo systemd || manual)
+
+# grub configurations
 GRUB_CONFIG=/boot/grub/grub.cfg
 BOOT_DEVICE="(hd0,gpt1)"
 BOOT_DEVICE_UUID="1D89-D9BA"
 LINUX_DEVICE="root=/dev/nvme0n1p2 ro rootflags=subvol=machines/exherbo"
 KERNEL_OPTS=""
 
+# common configurations
+JOBS=$((`nproc` + 2))
+RELEASE="unconfigured"
+
 function build_kernel()
 {
 	echo "Making bzImage...."
 	export PATH="/usr/libexec/distcc:${PATH}"
 	export DISTCC_HOSTS='10.2.112.3,lzo'
-	if make -j6; then
+	if make -j$JOBS; then
 		RELEASE=`<${WORK}/include/config/kernel.release`
 		return 0
 	else
@@ -21,23 +29,53 @@ function build_kernel()
 
 function install_kernel()
 {
-	echo "Installing kernel...."
-	echo -e "\t`cp -v arch/x86_64/boot/bzImage /boot/exherbo/vmlinuz-${RELEASE}`"
-	echo -e "\t`cp -v .config /boot/exherbo/config-${RELEASE}`"
-	echo -e "\t`cp -v .config /data/repositories/conf/$(hostname)-config-${RELEASE}`"
-	echo -e "\t`cp -v System.map /boot/exherbo/System.map-${RELEASE}`"
+	echo "Backing up kernel config..."
+	echo -e "  `cp -v .config /data/base/system/conf/$(hostname)-config-${RELEASE}`"
 
+	## /lib/modules
 	echo "Installing modules...."
-	# ensure kmod is selected since busybox breaks dracut
-	eclectic alternatives update kmod-tools kmod
-	make modules_install >/dev/null
+	eclectic alternatives update kmod-tools kmod # ensure kmod is selected since busybox breaks dracut
+	make modules_install
 
-	echo "Installing Intel microcode..."
-	echo -e "\t`cp -v /lib/firmware/microcode.cpio /boot/microcode.cpio`"
+	## /boot and /efi
+	mount /boot
+	case $INSTALLER in
+		systemd)
+			echo "Installing kernel (delegated to systemd)..."
+			eclectic installkernel set systemd # ensure systemd provider of installkernel
+			make install
 
-	if which dracut 2>&1 >/dev/null; then
-		dracut --xz --force /boot/exherbo/initramfs-${RELEASE}.img ${RELEASE}
-	fi
+			echo "Checking boot partition status..."
+			mount /efi
+			bootctl status
+			umount /efi
+			;;
+		manual)
+			echo "Installing kernel...."
+			echo -e "\t`cp -v arch/x86_64/boot/bzImage /boot/exherbo/vmlinuz-${RELEASE}`"
+			echo -e "\t`cp -v .config /boot/exherbo/config-${RELEASE}`"
+			echo -e "\t`cp -v System.map /boot/exherbo/System.map-${RELEASE}`"
+
+			echo "Installing Intel microcode..."
+			echo -e "\t`cp -v /lib/firmware/microcode.cpio /boot/microcode.cpio`"
+
+			echo "Generating and installing initramfs..."
+			if which dracut 2>&1 >/dev/null; then
+				dracut --xz --force /boot/exherbo/initramfs-${RELEASE}.img ${RELEASE}
+			fi
+
+			echo "Configuring grub..."
+			if which grub-mkconfig 2>&1 >/dev/null; then
+				do_my_grub_config > ${GRUB_CONFIG}	#do_grub_mkconfig
+			else
+				do_my_grub_config > ${GRUB_CONFIG}
+				#    ${EDITOR} ${GRUB_CONFIG}
+			fi
+			;;
+		*)
+			;;
+	esac
+	umount /boot
 }
 
 function do_my_grub_config()
@@ -112,26 +150,25 @@ menuentry 'Exherbo GNU/Linux, with Linux ${release}' --class exherbo --class gnu
   initrd /microcode.cpio /exherbo/initramfs-${release}.img
 }
 EOF
- done
+	done
 }
 
 function generate_rescue_entry()
 {
-	[[ -d /boot/sysrcd ]] || return 0
+	# [[ -d /boot/sysrcd ]] || return 0
 
 	# https://www.system-rescue.org/manual/Installing_SystemRescue_on_the_disk/
 	cat <<EOF
-menuentry 'SystemRescue (isoloop)' {
-  load_video
-  insmod gzio
-  insmod part_gpt
-  insmod fat
-  search --no-floppy --fs-uuid --set=root ${BOOT_DEVICE_UUID}
-  loopback loop /systemrescue.iso
-  echo   'Loading kernel ...'
-  linux  (loop)/sysresccd/boot/x86_64/vmlinuz img_label=boot img_loop=/systemrescue.iso archisobasedir=sysresccd copytoram setkmap=dvorak
-  echo   'Loading initramfs ...'
-  initrd /microcode.cpio (loop)/sysresccd/boot/x86_64/sysresccd.img
+menuentry 'SystemRescue (loopback)' {
+  iso_path='/sysresccd.iso'
+  export iso_path
+  search --set=root --file $iso_path
+  # support booting recent GRUB versions on UEFI systems
+  rmmod tpm
+  loopback loop $iso_path
+  set root=(loop)
+  # the path below is on the SystemRescue ISO, not the hard drive
+  configfile /boot/grub/loopback.cfg
 }
 menuentry 'Boot existing Linux System with SystemRescue Kernel (isoloop)' {
   load_video
@@ -139,9 +176,9 @@ menuentry 'Boot existing Linux System with SystemRescue Kernel (isoloop)' {
   insmod part_gpt
   insmod fat
   search --no-floppy --fs-uuid --set=root ${BOOT_DEVICE_UUID}
-  loopback loop /systemrescue.iso
+  loopback loop /sysresccd.iso
   echo   'Loading kernel ...'
-  linux  (loop)/sysresccd/boot/x86_64/vmlinuz img_label=boot img_loop=/systemrescue.iso archisobasedir=sysresccd findroot setkmap=dvorak
+  linux  (loop)/sysresccd/boot/x86_64/vmlinuz img_label=boot img_loop=/sysresccd.iso archisobasedir=sysresccd findroot setkmap=dvorak
   echo   'Loading initramfs ...'
   initrd /microcode.cpio (loop)/sysresccd/boot/x86_64/sysresccd.img
 }
@@ -151,16 +188,5 @@ EOF
 [[ -f ./kernel/Makefile ]] && WORK=. || WORK=/usr/src/linux
 pushd $WORK >/dev/null
 build_kernel || exit 1
-mount /boot 2>&1 >/dev/null
-install_kernel
+install_kernel || exit 1
 popd  >/dev/null
-
-if [[ -e /sbin/grub-mkconfig ]] ; then
-	do_my_grub_config > ${GRUB_CONFIG}
-	#do_grub_mkconfig
-else
-	do_my_grub_config > ${GRUB_CONFIG}
-	#    ${EDITOR} ${GRUB_CONFIG}
-fi
-
-umount /boot 2>&1 >/dev/null
